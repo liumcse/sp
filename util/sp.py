@@ -11,6 +11,24 @@ def _normalize(theta):
         theta = theta + 2*np.pi
     return theta
 
+def _validate_surroundings(point, edge_point):
+    '''
+    Test is there is any edge pixel around the point
+    '''
+    check = 0
+    x, y = point
+    # check if it is a standalone point
+    for i in range(-5, 5):
+        for j in range(-5 ,5):
+            x1 = int(np.round(x + i))
+            y1 = int(np.round(y + j))
+            if (x1, y1) in edge_point:
+                    check = check + 1
+    # print("Before check " + str(x) + ", " + str(y))
+    if check == 0:
+        return False  # standalone point, skip this
+    return True
+
 def first_pass(src):
     '''
     First pass
@@ -39,7 +57,7 @@ def first_pass(src):
 
     return edges, edge_point
 
-def second_pass(edges, edge_points, threshold=None, output_image=None):
+def second_pass(edges, edge_points, threshold=None, output_image=None, line_output=None):
     '''
     Second pass
 
@@ -67,6 +85,30 @@ def second_pass(edges, edge_points, threshold=None, output_image=None):
     total_count = str(len(lines))
     intersect_points_with_direction = dict()
 
+    if (line_output is not None):
+        height, width, _ = line_output.shape
+        diag_len = np.sqrt(height**2 + width**2)
+        count = 0
+        for line in lines:
+            count = (count + 1) % 4
+            rho,theta, _ = line
+            a = np.cos(theta)
+            b = np.sin(theta)
+            x0 = a*rho
+            y0 = b*rho
+            x1 = int(x0 + diag_len*(-b))
+            y1 = int(y0 + diag_len*(a))
+            x2 = int(x0 - diag_len*(-b))
+            y2 = int(y0 - diag_len*(a))
+            if count == 0:
+                cv2.line(line_output,(x1,y1),(x2,y2),(0,0,255),1)
+            elif count == 1:
+                cv2.line(line_output,(x1,y1),(x2,y2),(0,255,0),1)
+            elif count == 2:
+                cv2.line(line_output,(x1,y1),(x2,y2),(128,128,128),1)
+            else:
+                cv2.line(line_output,(x1,y1),(x2,y2),(255,0,0),1)
+
     for l1 in lines:
         count = count + 1
         print("Processing " + str(count) + "/" + total_count + " of second pass.")
@@ -87,20 +129,8 @@ def second_pass(edges, edge_points, threshold=None, output_image=None):
             x, y = np.linalg.solve(a, b)
             if x > width or x < 0 or y > height or y < 0:  # if out of bound, don't add
                 continue
-            check = 0
-            # check if it is a standalone point
-            for i in range(-5, 5):
-                for j in range(-5 ,5):
-                    x1 = int(np.round(x + i))
-                    y1 = int(np.round(y + j))
-                    if x1 >= width or x1 < 0 or y1 >= height or y1 < 0:
-                        check = check + 0
-                    else:
-                        if (x1, y1) in edge_points:
-                            check = check + 1
-            # print("Before check " + str(x) + ", " + str(y))
-            if check == 0:
-                continue
+            if not _validate_surroundings((x, y), edge_points):
+                continue  # standalone point, skip this
             # print("After check")
             if (x, y) not in intersect_points_with_direction.keys():
                 intersect_points_with_direction[(x, y)] = set()
@@ -110,28 +140,50 @@ def second_pass(edges, edge_points, threshold=None, output_image=None):
         # print(len(temp_intersect_point))
         # find direction at each intersection point in this line
         for point1 in temp_intersect_point:
-            visited.append(point1)
-            min_point = None
-            min_distance = float('inf')
+            # The following code finds the closest point to point1, which turns out might not be a good idea
+            # comment starts here ==========================================================================
+            # visited.append(point1)
+            # min_point = None
+            # min_distance = float('inf')
+            # x1, y1 = point1
+            # for point2 in temp_intersect_point:
+            #     if point2 in visited:
+            #         continue
+            #     x2, y2 = point2
+            #     distance = (x1 - x2)**2 + (y1 - y2)**2
+            #     if distance < min_distance and distance >= 10:  # distance >= 10 to skip overlapping points
+            #         min_distance = distance
+            #         min_point = (x2, y2)
+            # if min_point is not None:
+            #     x2, _ = min_point
+            #     _x2 = x2 - x1
+            #     _x1 = 1*np.cos(theta1 + np.pi/2)
+            #     if _x1*_x2 < 0:
+            #         _theta = _normalize(theta1 - np.pi)
+            #     else:
+            #         _theta = theta1
+            #     intersect_points_with_direction[point1].add(_theta)
+            #     intersect_points_with_direction[min_point].add(_normalize(_theta - np.pi))
+            # comment ends here ============================================================================
             x1, y1 = point1
             for point2 in temp_intersect_point:
                 if point2 in visited:
                     continue
                 x2, y2 = point2
+                if x1 == x2 and y1 == y2:
+                    continue
                 distance = (x1 - x2)**2 + (y1 - y2)**2
-                if distance < min_distance and distance >= 10:  # distance >= 10 to skip overlapping points
-                    min_distance = distance
-                    min_point = (x2, y2)
-            if min_point is not None:
-                x2, _ = min_point
+                if distance < 10:  # distance >= 10 to skip overlapping points
+                    continue
                 _x2 = x2 - x1
                 _x1 = 1*np.cos(theta1 + np.pi/2)
-                if _x1*_x2 < 0:
+                if _x1 * _x2 < 0:
                     _theta = _normalize(theta1 - np.pi)
                 else:
                     _theta = theta1
-                intersect_points_with_direction[point1].add(_theta)
-                intersect_points_with_direction[min_point].add(_normalize(_theta - np.pi))
+                intersect_points_with_direction[point1].add(_normalize(_theta))
+                intersect_points_with_direction[point2].add(_normalize(_theta - np.pi))
+            visited.append(point1)
 
     assert(len(intersect_points_with_direction.keys()) > 0)
     
@@ -308,13 +360,14 @@ def fourth_pass(output_image, intersect_points_with_direction, epsilon=0.05):
 def execute(src, threshold=None):
     assert(src is not None)
     output_image = 255 * np.ones(src.shape)
+    line_output = src.copy()
     # output_image = src.copy()
 
     # first pass
     edges, edge_points = first_pass(src)
     # second pass
     second_pass_output = src.copy()
-    intersect_points_with_direction = second_pass(edges, edge_points, threshold, output_image=second_pass_output)
+    intersect_points_with_direction = second_pass(edges, edge_points, threshold, output_image=second_pass_output, line_output=line_output)
     # third pass
     third_pass_output = src.copy()
     intersect_points_with_direction = third_pass(edges, intersect_points_with_direction, third_pass_output)
@@ -323,17 +376,19 @@ def execute(src, threshold=None):
 
     cv2.namedWindow("Original", cv2.WINDOW_NORMAL)
     cv2.namedWindow("First pass (Edges)", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("Line output", cv2.WINDOW_NORMAL)
     cv2.namedWindow("Second pass", cv2.WINDOW_NORMAL)
     cv2.namedWindow("Third pass", cv2.WINDOW_NORMAL)    
     cv2.namedWindow("Fourth pass (Output)", cv2.WINDOW_NORMAL)
 
     cv2.imshow("Original", src)
     cv2.imshow("First pass (Edges)", edges)
+    cv2.imshow("Line output", line_output)
     cv2.imshow("Second pass", second_pass_output)
     cv2.imshow("Third pass", third_pass_output)    
     cv2.imshow("Fourth pass (Output)", output_image)
     cv2.waitKey()
 
 if __name__ == "__main__":
-    src = cv2.imread("../img/webgl.png")
+    src = cv2.imread("../img/cube.png")
     execute(src)
